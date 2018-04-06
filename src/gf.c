@@ -185,6 +185,8 @@ jl_code_info_t *jl_type_infer(jl_method_instance_t *mi, size_t world, int force)
 #ifdef ENABLE_INFERENCE
     if (mi->inInference && !force)
         return NULL;
+    if (jl_is_method(mi->def.method) && mi->def.method->unspecialized == mi)
+        return NULL; // be careful never to infer the unspecialized method, this would not be valid
 
     jl_value_t **fargs;
     JL_GC_PUSHARGS(fargs, 3);
@@ -282,8 +284,6 @@ JL_DLLEXPORT jl_code_instance_t *jl_set_method_inferred(
     codeinst->def = mi;
     codeinst->min_world = min_world;
     codeinst->max_world = max_world;
-    codeinst->functionObjectsDecls.functionObject = NULL;
-    codeinst->functionObjectsDecls.specFunctionObject = NULL;
     codeinst->rettype = rettype;
     codeinst->inferred = inferred;
     //codeinst->edges = NULL;
@@ -296,6 +296,7 @@ JL_DLLEXPORT jl_code_instance_t *jl_set_method_inferred(
         codeinst->invoke = jl_fptr_const_return;
     }
     codeinst->specptr.fptr = NULL;
+    codeinst->isspecsig = 0;
     if (jl_is_method(mi->def.method))
         JL_LOCK(&mi->def.method->writelock);
     codeinst->next = mi->cache;
@@ -1703,7 +1704,8 @@ jl_method_instance_t *jl_get_unspecialized(jl_method_instance_t *method)
 {
     // one unspecialized version of a function can be shared among all cached specializations
     jl_method_t *def = method->def.method;
-    if (def->source == NULL) {
+    if (!jl_is_method(def) || def->source == NULL) {
+        // generated functions might instead randomly just never get inferred, sorry
         return method;
     }
     if (def->unspecialized == NULL) {
@@ -1717,7 +1719,8 @@ jl_method_instance_t *jl_get_unspecialized(jl_method_instance_t *method)
     return def->unspecialized;
 }
 
-jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t world)
+
+jl_code_instance_t *jl_method_compiled(jl_method_instance_t *mi, size_t world)
 {
     jl_code_instance_t *codeinst;
     codeinst = mi->cache;
@@ -1727,6 +1730,14 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
         }
         codeinst = codeinst->next;
     }
+    return NULL;
+}
+
+jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t world)
+{
+    jl_code_instance_t *codeinst = jl_method_compiled(mi, world);
+    if (codeinst)
+        return codeinst;
 
     if (jl_options.compile_enabled == JL_OPTIONS_COMPILE_OFF ||
         jl_options.compile_enabled == JL_OPTIONS_COMPILE_MIN) {
@@ -1737,6 +1748,7 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
             if (unspec && unspec->invoke != NULL) {
                 jl_code_instance_t *codeinst = jl_set_method_inferred(mi, (jl_value_t*)jl_any_type, NULL, NULL,
                     0, 1, ~(size_t)0);
+                codeinst->isspecsig = 0;
                 codeinst->specptr = unspec->specptr;
                 codeinst->rettype_const = unspec->rettype_const;
                 codeinst->invoke = unspec->invoke;
@@ -1757,42 +1769,24 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
         }
     }
 
-    codeinst = mi->cache;
-    while (codeinst) {
-        if (codeinst->min_world <= world && world <= codeinst->max_world && codeinst->functionObjectsDecls.functionObject != NULL)
-            break;
-        codeinst = codeinst->next;
-    }
-    if (codeinst == NULL) {
-        // if we don't have any decls already, try to generate it now
-        jl_code_info_t *src = NULL;
-        if (jl_is_method(mi->def.method) && !jl_rettype_inferred(mi, world, world) &&
-                 jl_symbol_name(mi->def.method->name)[0] != '@') {
-            // don't bother with typeinf on macros or toplevel thunks
-            // but try to infer everything else
-            src = jl_type_infer(mi, world, 0);
+    codeinst = jl_generate_fptr(mi, world);
+    if (!codeinst) {
+        jl_method_instance_t *unspec = jl_get_unspecialized(mi);
+        jl_code_instance_t *ucache = jl_get_method_inferred(unspec, (jl_value_t*)jl_any_type, 1, ~(size_t)0);
+        // ask codegen to make the fptr for unspec
+        if (ucache->invoke == NULL)
+            jl_generate_fptr_for_unspecialized(ucache);
+        if (ucache->invoke != jl_fptr_sparam &&
+            ucache->invoke != jl_fptr_interpret_call) {
+            return ucache;
         }
-        codeinst = jl_compile_linfo(mi, src, world, &jl_default_cgparams);
-        if (!codeinst) {
-            jl_method_instance_t *unspec = jl_get_unspecialized(mi);
-            jl_code_instance_t *ucache = jl_get_method_inferred(unspec, (jl_value_t*)jl_any_type, 1, ~(size_t)0);
-            // ask codegen to make the fptr for unspec
-            if (ucache->invoke == NULL)
-                jl_generate_fptr(ucache);
-            if (ucache->invoke != jl_fptr_sparam &&
-                ucache->invoke != jl_fptr_interpret_call) {
-                return ucache;
-            }
-            jl_code_instance_t *codeinst = jl_set_method_inferred(mi, (jl_value_t*)jl_any_type, NULL, NULL,
-                0, 1, ~(size_t)0);
-            codeinst->specptr = ucache->specptr;
-            codeinst->rettype_const = ucache->rettype_const;
-            codeinst->invoke = ucache->invoke;
-            return codeinst;
-        }
+        codeinst = jl_set_method_inferred(mi, (jl_value_t*)jl_any_type, NULL, NULL,
+            0, 1, ~(size_t)0);
+        codeinst->isspecsig = 0;
+        codeinst->specptr = ucache->specptr;
+        codeinst->rettype_const = ucache->rettype_const;
+        codeinst->invoke = ucache->invoke;
     }
-
-    jl_generate_fptr(codeinst);
     return codeinst;
 }
 
@@ -1886,10 +1880,10 @@ static void _generate_from_hint(jl_method_instance_t *mi, size_t world)
 {
     int generating_llvm = jl_options.outputo || jl_options.outputbc || jl_options.outputunoptbc;
     jl_code_info_t *src = NULL;
-    // If we are saving ji files (e.g. package pre-compilation or intermediate sysimg build steps),
-    // don't bother generating anything since it won't be saved.
     if (!jl_rettype_inferred(mi, world, world))
         src = jl_type_infer(mi, world, 1);
+    // If we are saving ji files (e.g. package pre-compilation or intermediate sysimg build steps),
+    // don't bother generating output in the current environment
     if (generating_llvm) {
         jl_code_instance_t *codeinst;
         if ((codeinst = jl_rettype_inferred(mi, world, world)))
@@ -1897,7 +1891,7 @@ static void _generate_from_hint(jl_method_instance_t *mi, size_t world)
                 return; // probably not a good idea to generate code
         // If we are saving LLVM or native code, generate the LLVM IR so that it'll
         // be included in the saved LLVM module.
-        (void)jl_compile_linfo(mi, src, world, &jl_default_cgparams);
+        // TODO: compilation is now stateless
     }
 }
 
@@ -2029,7 +2023,7 @@ static void show_call(jl_value_t *F, jl_value_t **args, uint32_t nargs)
 
 static jl_value_t *verify_type(jl_value_t *v) JL_NOTSAFEPOINT
 {
-    assert(jl_typeof(jl_typeof(v)));
+    assert(v && jl_typeof(v) && jl_typeof(jl_typeof(v)) == (jl_value_t*)jl_datatype_type);
     return v;
 }
 
@@ -2184,16 +2178,9 @@ JL_DLLEXPORT jl_value_t *jl_apply_generic(jl_value_t **args, uint32_t nargs)
                                                      world);
     JL_GC_PROMISE_ROOTED(mfunc);
     jl_value_t *res;
-    // manually inline key parts of jl_invoke:
-    jl_code_instance_t *codeinst = mfunc->cache;
-    while (codeinst) {
-        if (codeinst->min_world <= world && world <= codeinst->max_world && codeinst->invoke != NULL) {
-            res = codeinst->invoke(codeinst, args, nargs);
-            return verify_type(res);
-        }
-        codeinst = codeinst->next;
-    }
-    codeinst = jl_compile_method_internal(mfunc, world);
+    jl_code_instance_t *codeinst = jl_method_compiled(mfunc, world);
+    if (!codeinst)
+        codeinst = jl_compile_method_internal(mfunc, world);
     res = codeinst->invoke(codeinst, args, nargs);
     return verify_type(res);
 }
@@ -2324,7 +2311,9 @@ JL_DLLEXPORT jl_value_t *jl_get_invoke_lambda(jl_typemap_entry_t *entry,
 JL_DLLEXPORT jl_value_t *jl_invoke(jl_method_instance_t *meth, jl_value_t **args, uint32_t nargs)
 {
     size_t world = jl_get_ptls_states()->world_age;
-    jl_code_instance_t *codeinst = jl_compile_method_internal(meth, world);
+    jl_code_instance_t *codeinst = jl_method_compiled(meth, world);
+    if (!codeinst)
+        codeinst = jl_compile_method_internal(meth, world);
     return codeinst->invoke(codeinst, args, nargs);
 }
 
