@@ -20,6 +20,8 @@
 // JL_HAVE_UCONTEXT -- posix standard API, requires syscall for resume
 // JL_HAVE_SIGALTSTACK -- requires several syscall for start, setjmp for resume
 
+#define JL_HAVE_UCONTEXT
+
 #ifdef _OS_WINDOWS_
 #define JL_HAVE_UCONTEXT
 typedef win32_ucontext_t jl_ucontext_t;
