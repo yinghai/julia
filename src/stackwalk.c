@@ -522,15 +522,35 @@ JL_DLLEXPORT void jlbacktrace(void)
     jl_excstack_t *s = jl_get_ptls_states()->current_task->excstack;
     if (!s)
         return;
-    size_t bt_size = jl_excstack_bt_size(s, s->top);
+    size_t i, bt_size = jl_excstack_bt_size(s, s->top);
     uintptr_t *bt_data = jl_excstack_bt_data(s, s->top);
-    for (size_t i = 0; i < bt_size; ) {
+    for (i = 0; i < bt_size; ) {
         if (bt_data[i] == JL_BT_INTERP_FRAME) {
-            jl_safe_printf("Interpreter frame (ip: %d)\n", (int)bt_data[i+2]);
-            jl_static_show(JL_STDERR, (jl_value_t*)bt_data[i+1]);
+            jl_safe_printf("Interpreter frame (ip: %d)\n", (int)bt_data[i + 2]);
+            jl_static_show(JL_STDERR, (jl_value_t*)bt_data[i + 1]);
             i += 3;
         } else {
-            jl_gdblookup(bt_data[i] - 1);
+            jl_gdblookup(bt_data[i] - (i != 0));
+            i += 1;
+        }
+    }
+}
+
+void jl_rec_backtrace(jl_task_t *t);
+
+JL_DLLEXPORT void jlbacktrace_t(jl_task_t *t)
+{
+    jl_ptls_t ptls = jl_get_ptls_states();
+    jl_rec_backtrace(t);
+    size_t i, bt_size = ptls->bt_size;
+    uintptr_t *bt_data = ptls->bt_data;
+    for (i = 0; i < bt_size; ) {
+        if (bt_data[i] == JL_BT_INTERP_FRAME) {
+            jl_safe_printf("Interpreter frame (ip: %d)\n", (int)bt_data[i + 2]);
+            jl_static_show(JL_STDERR, (jl_value_t*)bt_data[i + 1]);
+            i += 3;
+        } else {
+            jl_gdblookup(bt_data[i] - (i != 0));
             i += 1;
         }
     }

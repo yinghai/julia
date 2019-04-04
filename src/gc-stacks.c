@@ -212,8 +212,12 @@ void sweep_stack_pools(void)
             continue;
         while (1) {
             jl_task_t *t = (jl_task_t*)lst[n];
+            assert(jl_is_task(t));
             if (gc_marked(jl_astaggedvalue(t)->bits.gc)) {
-                n++;
+                if (t->stkbuf == NULL)
+                    ndel++; // jl_release_task_stack called
+                else
+                    n++;
             }
             else {
                 ndel++;
@@ -232,4 +236,17 @@ void sweep_stack_pools(void)
         }
         live_tasks->len -= ndel;
     }
+}
+
+JL_DLLEXPORT jl_array_t *jl_live_tasks(void)
+{
+    jl_ptls_t ptls = jl_get_ptls_states();
+    arraylist_t *live_tasks = &ptls->heap.live_tasks;
+    size_t i, l = live_tasks->len;
+    jl_array_t *a = jl_alloc_vec_any(l + 1);
+    void **lst = live_tasks->items;
+    ((void**)jl_array_data(a))[0] = ptls->root_task;
+    for (i = 0; i < l; i++)
+        ((void**)jl_array_data(a))[i + 1] = lst[i];
+    return a;
 }
