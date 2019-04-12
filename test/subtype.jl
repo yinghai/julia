@@ -1509,3 +1509,6 @@ end
 
 # issue #26083
 @testintersect(Base.RefValue{<:Tuple}, Ref{Tuple{M}} where M, Base.RefValue{Tuple{M}} where M)
+
+# Various nasty varargs
+@assert issub_strict(Tuple{Int, Tuple{T}, Vararg{T, 3}} where T<:Int, Tuple{Int, Any, Any, Any, Integer})
