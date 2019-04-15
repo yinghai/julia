@@ -927,13 +927,15 @@ else
 endif
 
 # BinaryBuilder options.  We default to "on" for all the projects listed in BB_PROJECTS,
-# but only if contrib/normalize_triplet.py works for our requested triplet
+# but only if contrib/normalize_triplet.py works for our requested triplet.
 ifeq ($(shell python $(JULIAHOME)/contrib/normalize_triplet.py $(or $(XC_HOST),$(XC_HOST),$(BUILD_MACHINE)) >/dev/null 2>/dev/null; echo $$?),0)
-USE_BINARYBUILDER := 1
+USE_BINARYBUILDER ?= 1
 else
 ifneq ($(shell python $(JULIAHOME)/contrib/normalize_triplet.py x86_64-linux-gnu),x86_64-linux-gnu)
 $(warning python normalize_triplet.py appears to be non-functional, so BinaryBuilder disabled)
 endif
+# Note the `:=` instead of `?=`; this is to force a user to use `override` to get BB on a system
+# where we don't recognize the triplet.
 USE_BINARYBUILDER := 0
 endif
 
