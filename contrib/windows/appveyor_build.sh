@@ -85,37 +85,6 @@ case $(uname) in
     ;;
 esac
 
-# Download most recent Julia binary for dependencies
-if ! [ -e julia-installer.exe ]; then
-  f=julia-latest-win$bits.exe
-  echo "Downloading $f"
-  $curlflags -O https://julialangnightlies-s3.julialang.org/bin/winnt/x$archsuffix/$f
-  echo "Extracting $f"
-  $SEVENZIP x -y $f >> get-deps.log
-fi
-mkdir -p usr
-for i in bin/*.dll; do
-  $SEVENZIP e -y julia-installer.exe "$i" \
-    -ousr\\`dirname $i | sed -e 's|/julia||' -e 's|/|\\\\|g'` >> get-deps.log
-done
-for i in share/julia/base/pcre_h.jl; do
-  $SEVENZIP e -y julia-installer.exe "$i" -obase >> get-deps.log
-  # Touch the file to adjust the modification time, thereby (hopefully) avoiding
-  # issues with clock skew during the build
-  touch "base/$(basename $i)"
-done
-echo "override PCRE_INCL_PATH =" >> Make.user
-# Remove libjulia.dll if it was copied from downloaded binary
-rm -f usr/bin/libjulia.dll
-rm -f usr/bin/libjulia-debug.dll
-rm -f usr/bin/libgcc_s_s*-1.dll
-rm -f usr/bin/libgfortran-3.dll
-rm -f usr/bin/libquadmath-0.dll
-rm -f usr/bin/libssp-0.dll
-rm -f usr/bin/libstdc++-6.dll
-rm -f usr/bin/libccalltest.dll
-rm -f usr/bin/libpthread.dll
-
 if [ -z "$USEMSVC" ]; then
   if [ -z "`which ${CROSS_COMPILE}gcc 2>/dev/null`" ]; then
     f=$ARCH-4.9.2-release-win32-$exc-rt_v4-rev3.7z
@@ -162,20 +131,6 @@ if [ -z "`which make 2>/dev/null`" ]; then
   tar -xf `basename $f`
   export PATH=$PWD/bin:$PATH
 fi
-
-
-for lib in SUITESPARSE ARPACK BLAS LAPACK \
-    GMP MPFR PCRE LIBUNWIND; do
-  echo "USE_SYSTEM_$lib = 1" >> Make.user
-done
-echo 'override LIBLAPACK = $(LIBBLAS)' >> Make.user
-echo 'override LIBLAPACKNAME = $(LIBBLASNAME)' >> Make.user
-
-# Remaining dependencies:
-# libuv since its static lib is no longer included in the binaries
-# openlibm since we need it as a static library to work properly
-# utf8proc since its headers are not in the binary download
-echo 'override DEP_LIBS = libuv utf8proc' >> Make.user
 
 if [ -n "$USEMSVC" ]; then
   # Openlibm doesn't build well with MSVC right now
