@@ -188,15 +188,20 @@ static void restore_env(jl_stenv_t *e, jl_value_t *root, jl_savedenv_t *se) JL_N
 // quickly test that two types are identical
 static int obviously_egal(jl_value_t *a, jl_value_t *b)
 {
+    if (a == (jl_value_t*)jl_typeofbottom_type->super)
+        a = (jl_value_t*)jl_typeofbottom_type; // supertype(typeof(Union{})) is equal to, although distinct from, itself
+    if (b == (jl_value_t*)jl_typeofbottom_type->super)
+        b = (jl_value_t*)jl_typeofbottom_type; // supertype(typeof(Union{})) is equal to, although distinct from, itself
     if (a == b) return 1;
     if (jl_typeof(a) != jl_typeof(b)) return 0;
     if (jl_is_datatype(a)) {
-        jl_datatype_t *ad = (jl_datatype_t*)a, *bd = (jl_datatype_t*)b;
+        jl_datatype_t *ad = (jl_datatype_t*)a;
+        jl_datatype_t *bd = (jl_datatype_t*)b;
         if (ad->name != bd->name) return 0;
         if (ad->isconcretetype || bd->isconcretetype) return 0;
         size_t i, np = jl_nparams(ad);
         if (np != jl_nparams(bd)) return 0;
-        for(i=0; i < np; i++) {
+        for (i = 0; i < np; i++) {
             if (!obviously_egal(jl_tparam(ad,i), jl_tparam(bd,i)))
                 return 0;
         }
@@ -216,22 +221,33 @@ static int obviously_egal(jl_value_t *a, jl_value_t *b)
 
 static int obviously_unequal(jl_value_t *a, jl_value_t *b)
 {
+    if (a == (jl_value_t*)jl_typeofbottom_type->super)
+        a = (jl_value_t*)jl_typeofbottom_type; // supertype(typeof(Union{})) is equal to, although distinct from, itself
+    if (b == (jl_value_t*)jl_typeofbottom_type->super)
+        b = (jl_value_t*)jl_typeofbottom_type; // supertype(typeof(Union{})) is equal to, although distinct from, itself
     if (a == b)
         return 0;
-    if (jl_is_concrete_type(a) || jl_is_concrete_type(b))
+    if (jl_is_unionall(a))
+        a = jl_unwrap_unionall(a);
+    if (jl_is_unionall(b))
+        b = jl_unwrap_unionall(b);
+    if ((jl_is_concrete_type(a) && jl_is_datatype(b)) ||
+        (jl_is_concrete_type(b) && jl_is_datatype(a))) {
         return 1;
-    if (jl_is_unionall(a)) a = jl_unwrap_unionall(a);
-    if (jl_is_unionall(b)) b = jl_unwrap_unionall(b);
+    }
     if (jl_is_datatype(a)) {
-        if (b == jl_bottom_type) return 1;
+        if (b == jl_bottom_type)
+            return 1;
         if (jl_is_datatype(b)) {
-            jl_datatype_t *ad = (jl_datatype_t*)a, *bd = (jl_datatype_t*)b;
+            jl_datatype_t *ad = (jl_datatype_t*)a;
+            jl_datatype_t *bd = (jl_datatype_t*)b;
             if (ad->name != bd->name)
                 return 1;
             size_t i, np = jl_nparams(ad);
-            if (np != jl_nparams(bd)) return 1;
-            for(i=0; i < np; i++) {
-                if (obviously_unequal(jl_tparam(ad,i), jl_tparam(bd,i)))
+            if (np != jl_nparams(bd))
+                return 1;
+            for (i = 0; i < np; i++) {
+                if (obviously_unequal(jl_tparam(ad, i), jl_tparam(bd, i)))
                     return 1;
             }
         }
@@ -245,7 +261,8 @@ static int obviously_unequal(jl_value_t *a, jl_value_t *b)
         if (jl_is_long(b) && jl_unbox_long(a) != jl_unbox_long(b))
             return 1;
     }
-    else if (jl_is_long(b)) return 1;
+    else if (jl_is_long(b))
+        return 1;
     if ((jl_is_symbol(a) || jl_is_symbol(b)) && a != b)
         return 1;
     return 0;
@@ -1186,6 +1203,26 @@ JL_DLLEXPORT int jl_subtype_env_size(jl_value_t *t)
     return sz;
 }
 
+static int concrete_min(jl_value_t *t)
+{
+    if (jl_is_unionall(t))
+        t = jl_unwrap_unionall(t);
+    if (jl_is_datatype(t)) {
+        if (jl_is_type_type(t))
+            return 0; // Type{T} may have the concrete supertype `typeof(T)`, so don't try to handle them here
+        return jl_is_concrete_type(t) ? 1 : 2;
+    }
+    if (jl_is_typevar(t))
+        return 0; // could be 0 or more, since we didn't track if it was unbound
+    if (jl_is_uniontype(t)) {
+        int count = concrete_min(((jl_uniontype_t*)t)->a);
+        if (count > 1)
+            return count;
+        return count + concrete_min(((jl_uniontype_t*)t)->b);
+    }
+    return 2; // up to infinite
+}
+
 // quickly compute if x seems like a possible subtype of y
 // especially optimized for x isa concrete type
 // returns true if it could be easily determined, with the result in subtype
@@ -1201,6 +1238,10 @@ JL_DLLEXPORT int jl_obvious_subtype(jl_value_t *x, jl_value_t *y, int *subtype)
         x = jl_unwrap_unionall(x);
     if (jl_is_unionall(y))
         y = jl_unwrap_unionall(y);
+    if (x == (jl_value_t*)jl_typeofbottom_type->super)
+        x = (jl_value_t*)jl_typeofbottom_type; // supertype(typeof(Union{})) is equal to, although distinct from, itself
+    if (y == (jl_value_t*)jl_typeofbottom_type->super)
+        y = (jl_value_t*)jl_typeofbottom_type; // supertype(typeof(Union{})) is equal to, although distinct from, itself
     if (x == y || y == (jl_value_t*)jl_any_type) {
         *subtype = 1;
         return 1;
@@ -1354,6 +1395,43 @@ JL_DLLEXPORT int jl_obvious_subtype(jl_value_t *x, jl_value_t *y, int *subtype)
                     }
                 }
             }
+            if (i < npx) {
+                // look at the vararg tail too
+                assert(vy && istuple && iscov && uncertain);
+                jl_value_t *b = jl_unwrap_vararg(jl_tparam(y, i));
+                jl_value_t *a1 = jl_tparam(x, i);
+                if (npx - vx > npy && jl_is_typevar(b) && concrete_min(a1) > 1) {
+                    // diagonal rule: they must all be concrete
+                    *subtype = 0;
+                    return 1;
+                }
+                if (jl_is_type_type(a1) && jl_is_type(jl_tparam0(a1))) {
+                    a1 = jl_typeof(jl_tparam0(a1));
+                }
+                for (; i < npx; i++) {
+                    jl_value_t *a = jl_tparam(x, i);
+                    if (vx && i == npx - 1) {
+#ifndef NDEBUG
+                        continue; // XXX: subtyping bug #31805
+#endif
+                        a = jl_unwrap_vararg(a);
+                    }
+                    else if (i > npy && jl_is_typevar(b) && !jl_is_type_type(a)) {
+                        // diagonal rule: all the later parameters are also constrained to be equal to the first
+                        jl_value_t *a2 = a;
+                        if (jl_is_type_type(a) && jl_is_type(jl_tparam0(a))) {
+                            // if a is exactly Type{T}, then use typeof(T) instead here
+                            a2 = jl_typeof(jl_tparam0(a));
+                        }
+                        if (jl_obvious_subtype(a2, a1, subtype) && !*subtype)
+                            return 1;
+                        if (jl_obvious_subtype(a1, a2, subtype) && !*subtype)
+                            return 1;
+                    }
+                    if (jl_obvious_subtype(a, b, subtype) && !*subtype)
+                        return 1;
+                }
+            }
             if (uncertain)
                 return 0;
             *subtype = 1;
@@ -1421,16 +1499,91 @@ JL_DLLEXPORT int jl_subtype(jl_value_t *x, jl_value_t *y)
 
 JL_DLLEXPORT int jl_types_equal(jl_value_t *a, jl_value_t *b)
 {
-    if (obviously_egal(a, b))    return 1;
-    if (obviously_unequal(a, b)) return 0;
+    if (obviously_egal(a, b))
+        return 1;
+    if (obviously_unequal(a, b))
+        return 0;
+    // the following is an interleaved version of:
+    //   return jl_subtype(a, b) && jl_subtype(b, a)
     if (jl_is_datatype(a) && !jl_is_concrete_type(b)) {
-        // if one type looks more likely to be abstract, check it on the left
+        // if one type looks simpler, check it on the right
         // first in order to reject more quickly.
         jl_value_t *temp = a;
         a = b;
         b = temp;
     }
-    return jl_subtype(a, b) && jl_subtype(b, a);
+    // first check if a <: b has an obvious answer
+    int subtype_ab = 2;
+    if (b == (jl_value_t*)jl_any_type || a == jl_bottom_type) {
+        subtype_ab = 1;
+    }
+    else if (jl_typeof(a) == jl_typeof(b) &&
+        (jl_is_unionall(b) || jl_is_uniontype(b)) &&
+        jl_egal(a, b)) {
+        subtype_ab = 1;
+    }
+    else if (jl_obvious_subtype(a, b, &subtype_ab)) {
+#ifdef NDEBUG
+        if (subtype_ab == 0)
+            return 0;
+#endif
+        if (jl_has_free_typevars(b))
+            subtype_ab = 3;
+    }
+    else {
+        subtype_ab = 3;
+    }
+    // next check if b <: a has an obvious answer
+    int subtype_ba = 2;
+    if (a == (jl_value_t*)jl_any_type || b == jl_bottom_type) {
+        subtype_ba = 1;
+    }
+    else if (jl_typeof(b) == jl_typeof(a) &&
+        (jl_is_unionall(a) || jl_is_uniontype(a)) &&
+        jl_egal(b, a)) {
+        subtype_ba = 1;
+    }
+    else if (jl_obvious_subtype(b, a, &subtype_ba)) {
+#ifdef NDEBUG
+        if (subtype_ba == 0)
+            return 0;
+#endif
+        if (jl_has_free_typevars(a))
+            subtype_ba = 3;
+    }
+    else {
+        subtype_ba = 3;
+    }
+    // finally, do full subtyping for any inconclusive test
+    jl_stenv_t e;
+#ifdef NDEBUG
+    if (subtype_ab != 1)
+#endif
+    {
+        init_stenv(&e, NULL, 0);
+        int subtype = forall_exists_subtype(a, b, &e, 0);
+#ifdef NDEBUG
+        if (subtype == 0)
+            return 0;
+#endif
+        assert(subtype_ab == 3 || subtype_ab == subtype);
+        subtype_ab = subtype;
+    }
+#ifdef NDEBUG
+    if (subtype_ba != 1)
+#endif
+    {
+        init_stenv(&e, NULL, 0);
+        int subtype = forall_exists_subtype(b, a, &e, 0);
+#ifdef NDEBUG
+        if (subtype == 0)
+            return 0;
+#endif
+        assert(subtype_ba == 3 || subtype_ba == subtype);
+        subtype_ba = subtype;
+    }
+    // all tests successful
+    return subtype_ab && subtype_ba;
 }
 
 JL_DLLEXPORT int jl_is_not_broken_subtype(jl_value_t *a, jl_value_t *b)
