@@ -29,6 +29,7 @@ Standard library changes
 #### LinearAlgebra
 
 * `diagm` and `spdiagm` now accept optional `m,n` initial arguments to specify a size ([#31654]).
+* New functions `symmetrize` and `symmetrize!` for constructing symmetric matrices ([#31836]).
 
 #### SparseArrays
 
