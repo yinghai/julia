@@ -134,6 +134,14 @@ function test_diagonal()
     @test  issub(Tuple{Tuple{T, T}} where T>:Int, Tuple{Tuple{T, T} where T>:Int})
     @test  issub(Vector{Tuple{T, T} where Number<:T<:Number},
                  Vector{Tuple{Number, Number}})
+
+    @test !issub(Type{Tuple{T,Any} where T},   Type{Tuple{T,T}} where T)
+    @test !issub(Type{Tuple{T,Any,T} where T}, Type{Tuple{T,T,T}} where T)
+    @test  issub(Type{Tuple{T} where T},       Type{Tuple{T}} where T)
+    @test !issub(Type{Tuple{T,T} where T},     Type{Tuple{T,T}} where T)
+    @test !issub(Type{Tuple{T,T,T} where T},   Type{Tuple{T,T,T}} where T)
+    @test  isequal_type(Ref{Tuple{T, T} where Int<:T<:Int},
+                        Ref{Tuple{S, S}} where Int<:S<:Int)
 end
 
 # level 3: UnionAll
