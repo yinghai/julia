@@ -773,7 +773,8 @@ struct subtype_unionall_env {
 static int subtype_unionall_callback(struct subtype_unionall_env *env, int8_t R, jl_stenv_t *s, int param) {
     if (R) {
         return subtype(env->t, env->ubody, s, param);
-    } else {
+    }
+    else {
         return subtype(env->ubody, env->t, s, param);
     }
 }
@@ -852,7 +853,8 @@ static int subtype_tuple_varargs(struct subtype_tuple_env *env, jl_stenv_t *e, i
         if (jl_is_long(yl)) {
             return 0;
         }
-    } else {
+    }
+    else {
         jl_value_t *xl = jl_tparam1(env->vtx);
         if (jl_is_typevar(xl)) {
             jl_varbinding_t *xlv = lookup(e, (jl_tvar_t*)xl);
@@ -874,7 +876,8 @@ static int subtype_tuple_varargs(struct subtype_tuple_env *env, jl_stenv_t *e, i
                     if (jl_is_long(yl)) {
                         return jl_unbox_long(yl) + 1 == env->vy;
                     }
-                } else {
+                }
+                else {
                     // We can skip the subtype check, but we still
                     // need to make sure to constrain the length of y
                     // to 0.
@@ -923,8 +926,7 @@ constrain_length:
 
 static int subtype_tuple_tail(struct subtype_tuple_env *env, int8_t R, jl_stenv_t *e, int param)
 {
-loop:
-    // while (i <= lx) {
+loop: // while (i <= lx) {
         if (env->i >= env->lx)
             goto done;
 
@@ -949,7 +951,8 @@ loop:
                 env->vtx = xi;
             }
             xi = env->vtx;
-        } else {
+        }
+        else {
             xi = jl_tparam(env->xd, env->i);
         }
 
@@ -968,7 +971,8 @@ loop:
                     env->vty = yi;
                 }
                 yi = env->vty;
-            } else {
+            }
+            else {
                 yi = jl_tparam(env->yd, env->j);
             }
         }
@@ -1015,7 +1019,7 @@ loop:
             env->j++;
 
         goto loop;
-    // }
+    // } (from loop:)
 
 done:
     // TODO: handle Vararg with explicit integer length parameter
@@ -1053,10 +1057,12 @@ static int subtype_tuple(jl_datatype_t *xd, jl_datatype_t *yd, jl_stenv_t *e, in
                 return 0;
             else if (env.lx < env.ly) // Unbounded includes N == 0
                 return 0;
-        } else if (env.vvy == JL_VARARG_NONE && !check_vararg_length(jl_tparam(env.xd, env.lx-1), env.ly+1-env.lx, e)) {
+        }
+        else if (env.vvy == JL_VARARG_NONE && !check_vararg_length(jl_tparam(env.xd, env.lx-1), env.ly+1-env.lx, e)) {
             return 0;
         }
-    } else {
+    }
+    else {
         size_t nx = env.lx;
         if (env.vvx == JL_VARARG_INT)
             nx += jl_vararg_length(jl_tparam(env.xd, env.lx-1)) - 1;
@@ -1070,7 +1076,8 @@ static int subtype_tuple(jl_datatype_t *xd, jl_datatype_t *yd, jl_stenv_t *e, in
         if (env.vvy == JL_VARARG_NONE || env.vvy == JL_VARARG_INT) {
             if (nx != ny)
                 return 0;
-        } else {
+        }
+        else {
             if (ny > nx)
                 return 0;
         }
