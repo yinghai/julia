@@ -179,19 +179,6 @@ Random.seed!(1)
         qrA = qr(A)
         @test qrA \ D ≈ A \ D
 
-        # HermOrSym
-        A     = rand(elty, n, n)
-        Asym  = Symmetric(A + transpose(A), :U)
-        Aherm = Hermitian(A + adjoint(A), :U)
-        @test Array(D*Transpose(Asym)) ≈ Array(D) * Array(transpose(Asym))
-        @test Array(D*Adjoint(Asym)) ≈ Array(D) * Array(adjoint(Asym))
-        @test Array(D*Transpose(Aherm)) ≈ Array(D) * Array(transpose(Aherm))
-        @test Array(D*Adjoint(Aherm)) ≈ Array(D) * Array(adjoint(Aherm))
-        @test Array(Transpose(Asym)*Transpose(D)) ≈ Array(transpose(Asym)) * Array(transpose(D))
-        @test Array(Transpose(D)*Transpose(Asym)) ≈ Array(transpose(D)) * Array(transpose(Asym))
-        @test Array(Adjoint(Aherm)*Adjoint(D)) ≈ Array(adjoint(Aherm)) * Array(adjoint(D))
-        @test Array(Adjoint(D)*Adjoint(Aherm)) ≈ Array(adjoint(D)) * Array(adjoint(Aherm))
-
         # Performance specialisations for A*_mul_B!
         vvv = similar(vv)
         @test (r = Matrix(D) * vv   ; mul!(vvv, D, vv)  ≈ r ≈ vvv)
