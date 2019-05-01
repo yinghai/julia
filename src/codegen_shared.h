@@ -15,6 +15,7 @@ enum AddressSpace {
 
 #define JLCALL_CC (CallingConv::ID)36
 #define JLCALL_F_CC (CallingConv::ID)37
+#define JLCALL_F2_CC (CallingConv::ID)38
 
 static inline void llvm_dump(llvm::Value *v)
 {

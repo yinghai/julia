@@ -1795,21 +1795,21 @@ jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *mi, size_t 
     return codeinst;
 }
 
-JL_DLLEXPORT jl_value_t *jl_fptr_const_return(jl_code_instance_t *m, jl_value_t **args, uint32_t nargs)
+JL_DLLEXPORT jl_value_t *jl_fptr_const_return(jl_value_t *f, jl_value_t **args, uint32_t nargs, jl_code_instance_t *m)
 {
     return m->rettype_const;
 }
 
-JL_DLLEXPORT jl_value_t *jl_fptr_args(jl_code_instance_t *m, jl_value_t **args, uint32_t nargs)
+JL_DLLEXPORT jl_value_t *jl_fptr_args(jl_value_t *f, jl_value_t **args, uint32_t nargs, jl_code_instance_t *m)
 {
-    return m->specptr.fptr1(args[0], &args[1], nargs - 1);
+    return m->specptr.fptr1(f, args, nargs);
 }
 
-JL_DLLEXPORT jl_value_t *jl_fptr_sparam(jl_code_instance_t *m, jl_value_t **args, uint32_t nargs)
+JL_DLLEXPORT jl_value_t *jl_fptr_sparam(jl_value_t *f, jl_value_t **args, uint32_t nargs, jl_code_instance_t *m)
 {
     jl_svec_t *sparams = m->def->sparam_vals;
     assert(sparams != jl_emptysvec);
-    return m->specptr.fptr3(sparams, args[0], &args[1], nargs - 1);
+    return m->specptr.fptr3(f, args, nargs, sparams);
 }
 
 // Return the index of the invoke api, if known
@@ -2024,10 +2024,32 @@ static void show_call(jl_value_t *F, jl_value_t **args, uint32_t nargs)
 }
 #endif
 
-static jl_value_t *verify_type(jl_value_t *v) JL_NOTSAFEPOINT
+STATIC_INLINE jl_value_t *verify_type(jl_value_t *v) JL_NOTSAFEPOINT
 {
     assert(jl_typeof(jl_typeof(v)));
     return v;
+}
+
+STATIC_INLINE jl_value_t *_jl_invoke(jl_value_t *f, jl_value_t **args, uint32_t nargs, jl_method_instance_t *mfunc, size_t world)
+{
+    // manually inline key parts of jl_compile_method_internal:
+    jl_code_instance_t *codeinst = mfunc->cache;
+    while (codeinst) {
+        if (codeinst->min_world <= world && world <= codeinst->max_world && codeinst->invoke != NULL) {
+            jl_value_t *res = codeinst->invoke(f, args, nargs, codeinst);
+            return verify_type(res);
+        }
+        codeinst = codeinst->next;
+    }
+    codeinst = jl_compile_method_internal(mfunc, world);
+    jl_value_t *res = codeinst->invoke(f, args, nargs, codeinst);
+    return verify_type(res);
+}
+
+JL_DLLEXPORT jl_value_t *jl_invoke(jl_value_t *f, jl_value_t **args, uint32_t nargs, jl_method_instance_t *mfunc)
+{
+    size_t world = jl_get_ptls_states()->world_age;
+    return _jl_invoke(f, args, nargs, mfunc, world);
 }
 
 STATIC_INLINE int sig_match_fast(jl_value_t **args, jl_value_t **sig, size_t i, size_t n)
@@ -2180,19 +2202,7 @@ JL_DLLEXPORT jl_value_t *jl_apply_generic(jl_value_t **args, uint32_t nargs)
                                                      jl_int32hash_fast(jl_return_address()),
                                                      world);
     JL_GC_PROMISE_ROOTED(mfunc);
-    jl_value_t *res;
-    // manually inline key parts of jl_invoke:
-    jl_code_instance_t *codeinst = mfunc->cache;
-    while (codeinst) {
-        if (codeinst->min_world <= world && world <= codeinst->max_world && codeinst->invoke != NULL) {
-            res = codeinst->invoke(codeinst, args, nargs);
-            return verify_type(res);
-        }
-        codeinst = codeinst->next;
-    }
-    codeinst = jl_compile_method_internal(mfunc, world);
-    res = codeinst->invoke(codeinst, args, nargs);
-    return verify_type(res);
+    return _jl_invoke(args[0], &args[1], nargs - 1, mfunc, world);
 }
 
 JL_DLLEXPORT jl_value_t *jl_gf_invoke_lookup(jl_value_t *types JL_PROPAGATES_ROOT, size_t world)
@@ -2247,15 +2257,15 @@ jl_value_t *jl_gf_invoke_by_method(jl_method_t *method, jl_value_t **args, size_
 {
     jl_method_instance_t *mfunc = NULL;
     jl_typemap_entry_t *tm = NULL;
-    jl_svec_t *tpenv = jl_emptysvec;
-    jl_tupletype_t *tt = NULL;
-    JL_GC_PUSH2(&tpenv, &tt);
     if (method->invokes != NULL)
         tm = jl_typemap_assoc_exact(method->invokes, args, nargs, 1, 1);
     if (tm) {
         mfunc = tm->func.linfo;
     }
     else {
+        jl_svec_t *tpenv = jl_emptysvec;
+        jl_tupletype_t *tt = NULL;
+        JL_GC_PUSH2(&tpenv, &tt);
         JL_LOCK(&method->writelock);
         tt = arg_type_tuple(args, nargs);
         if (jl_is_unionall(method->sig)) {
@@ -2268,10 +2278,11 @@ jl_value_t *jl_gf_invoke_by_method(jl_method_t *method, jl_value_t **args, size_
 
         mfunc = cache_method(NULL, &method->invokes, (jl_value_t*)method, tt, method, 1, tpenv);
         JL_UNLOCK(&method->writelock);
+        JL_GC_POP();
     }
-    JL_GC_POP();
     JL_GC_PROMISE_ROOTED(mfunc);
-    return jl_invoke(mfunc, args, nargs);
+    size_t world = jl_get_ptls_states()->world_age;
+    return _jl_invoke(args[0], &args[1], nargs - 1, mfunc, world);
 }
 
 JL_DLLEXPORT jl_value_t *jl_get_invoke_lambda(jl_typemap_entry_t *entry,
@@ -2318,13 +2329,6 @@ JL_DLLEXPORT jl_value_t *jl_get_invoke_lambda(jl_typemap_entry_t *entry,
     JL_GC_POP();
     JL_UNLOCK(&method->writelock);
     return (jl_value_t*)mfunc;
-}
-
-JL_DLLEXPORT jl_value_t *jl_invoke(jl_method_instance_t *meth, jl_value_t **args, uint32_t nargs)
-{
-    size_t world = jl_get_ptls_states()->world_age;
-    jl_code_instance_t *codeinst = jl_compile_method_internal(meth, world);
-    return codeinst->invoke(codeinst, args, nargs);
 }
 
 // Return value is rooted globally
