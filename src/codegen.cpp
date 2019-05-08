@@ -280,7 +280,6 @@ static Function *jltuple_func;
 static Function *jlnsvec_func;
 static Function *jlapplygeneric_func;
 static Function *jlinvoke_func;
-static Function *jlapply2va_func;
 static Function *jlgetfield_func;
 static Function *jlmethod_func;
 static Function *jlgenericfunction_func;
@@ -550,11 +549,6 @@ static void allocate_gc_frame(jl_codectx_t &ctx, BasicBlock *b0);
 static void CreateTrap(IRBuilder<> &irbuilder);
 static CallInst *emit_jlcall(jl_codectx_t &ctx, Value *theFptr, Value *theF,
                              jl_cgval_t *args, size_t nargs, CallingConv::ID cc);
-static CallInst *emit_jlcall(jl_codectx_t &ctx, Value *theFptr, Value *theF,
-                             jl_cgval_t *args, size_t nargs)
-{
-    return emit_jlcall(ctx, theFptr, theF, args, nargs, theF ? JLCALL_F_CC : JLCALL_CC);
-}
 
 static Value *literal_pointer_val(jl_codectx_t &ctx, jl_value_t *p);
 static GlobalVariable *prepare_global_in(Module *M, GlobalVariable *G);
@@ -2191,7 +2185,7 @@ static jl_cgval_t emit_getfield(jl_codectx_t &ctx, const jl_cgval_t &strct, jl_s
         strct,
         mark_julia_const((jl_value_t*)name)
     };
-    Value *result = emit_jlcall(ctx, jlgetfield_func, maybe_decay_untracked(V_null), myargs_array, 2);
+    Value *result = emit_jlcall(ctx, jlgetfield_func, maybe_decay_untracked(V_null), myargs_array, 2, JLCALL_F_CC);
     return mark_julia_type(ctx, result, true, jl_any_type);
 }
 
@@ -2504,7 +2498,7 @@ static bool emit_builtin_call(jl_codectx_t &ctx, jl_cgval_t *ret, jl_value_t *f,
                 nva = ctx.builder.CreateTrunc(nva, T_int32);
 #endif
                 Value *theArgs = ctx.builder.CreateInBoundsGEP(ctx.argArray, ConstantInt::get(T_size, ctx.nReqArgs));
-                Value *r = ctx.builder.CreateCall(prepare_call(jlapply2va_func), { theF, theArgs, nva });
+                Value *r = ctx.builder.CreateCall(prepare_call(jlapplygeneric_func), { theF, theArgs, nva });
                 *ret = mark_julia_type(ctx, r, true, jl_any_type);
                 return true;
             }
@@ -3266,13 +3260,13 @@ static jl_cgval_t emit_call(jl_codectx_t &ctx, jl_expr_t *ex, jl_value_t *rt)
         std::map<jl_fptr_args_t, Function*>::iterator it = builtin_func_map.find(jl_get_builtin_fptr(f.constant));
         if (it != builtin_func_map.end()) {
             Value *theFptr = it->second;
-            Value *ret = emit_jlcall(ctx, theFptr, maybe_decay_untracked(V_null), &argv[1], nargs - 1);
+            Value *ret = emit_jlcall(ctx, theFptr, maybe_decay_untracked(V_null), &argv[1], nargs - 1, JLCALL_F_CC);
             return mark_julia_type(ctx, ret, true, rt);
         }
     }
 
     // emit function and arguments
-    Value *callval = emit_jlcall(ctx, jlapplygeneric_func, nullptr, argv, nargs);
+    Value *callval = emit_jlcall(ctx, jlapplygeneric_func, nullptr, argv, nargs, JLCALL_F_CC);
     return mark_julia_type(ctx, callval, true, rt);
 }
 
@@ -4137,8 +4131,7 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr, ssize_t ssaval)
             assert(nargs <= jl_datatype_nfields(jl_tparam0(ty)) + 1);
             return emit_new_struct(ctx, jl_tparam0(ty), nargs - 1, &argv[1]);
         }
-        Value *typ = boxed(ctx, argv[0]);
-        Value *val = emit_jlcall(ctx, jlnew_func, typ, &argv[1], nargs - 1);
+        Value *val = emit_jlcall(ctx, jlnew_func, nullptr, argv, nargs, JLCALL_F_CC);
         // temporarily mark as `Any`, expecting `emit_ssaval_assign` to update
         // it to the inferred type.
         return mark_julia_type(ctx, val, true, (jl_value_t*)jl_any_type);
@@ -4335,7 +4328,7 @@ static void emit_cfunc_invalidate(
         }
     }
     assert(AI == gf_thunk->arg_end());
-    Value *gf_ret = emit_jlcall(ctx, jlapplygeneric_func, NULL, myargs, nargs);
+    Value *gf_ret = emit_jlcall(ctx, jlapplygeneric_func, nullptr, myargs, nargs, JLCALL_F_CC);
     jl_cgval_t gf_retbox = mark_julia_type(ctx, gf_ret, true, jl_any_type);
     jl_value_t *astrt = codeinst->rettype;
     if (cc != jl_returninfo_t::Boxed) {
@@ -4707,11 +4700,11 @@ static Function* gen_cfun_wrapper(
             // for jlcall, we need to pass the function object even if it is a ghost.
             Value *theF = boxed(ctx, inputargs[0]);
             assert(theF);
-            ret_jlcall = emit_jlcall(ctx, theFptr, theF, &inputargs[1], nargs);
+            ret_jlcall = emit_jlcall(ctx, theFptr, theF, &inputargs[1], nargs, JLCALL_F_CC);
             ctx.builder.CreateBr(b_after);
             ctx.builder.SetInsertPoint(b_generic);
         }
-        Value *ret = emit_jlcall(ctx, prepare_call(jlapplygeneric_func), NULL, inputargs, nargs + 1);
+        Value *ret = emit_jlcall(ctx, prepare_call(jlapplygeneric_func), NULL, inputargs, nargs + 1, JLCALL_F_CC);
         if (age_ok) {
             ctx.builder.CreateBr(b_after);
             ctx.builder.SetInsertPoint(b_after);
@@ -6007,8 +6000,9 @@ static std::unique_ptr<Module> emit_function(
                 // FIXME: this may assert since the type of vi might not be isbits here
                 emit_varinfo_assign(ctx, vi, tuple);
             } else {
-                jl_cgval_t tuple = mark_julia_type(ctx, emit_jlcall(ctx, prepare_call(jltuple_func), maybe_decay_untracked(V_null),
-                    vargs, ctx.nvargs), true, vi.value.typ);
+                Value *vtpl = emit_jlcall(ctx, prepare_call(jltuple_func), maybe_decay_untracked(V_null),
+                    vargs, ctx.nvargs, JLCALL_F_CC);
+                jl_cgval_t tuple = mark_julia_type(ctx, vtpl, true, vi.value.typ);
                 emit_varinfo_assign(ctx, vi, tuple);
             }
         }
@@ -7276,12 +7270,7 @@ static void init_julia_llvm_env(Module *m)
     jltuple_func = builtin_func_map[jl_f_tuple];
     jlgetfield_func = builtin_func_map[jl_f_getfield];
 
-    jlapply2va_func = jlcall_func_to_llvm("jl_apply_2va", &jl_apply_2va, m);
-
-    std::vector<Type*> agargs(0);
-    agargs.push_back(T_pprjlvalue);
-    agargs.push_back(T_uint32);
-    jlapplygeneric_func = Function::Create(FunctionType::get(T_prjlvalue, agargs, false),
+    jlapplygeneric_func = Function::Create(jl_func_sig,
                                            Function::ExternalLinkage,
                                            "jl_apply_generic", m);
     add_return_attr(jlapplygeneric_func, Attribute::NonNull);

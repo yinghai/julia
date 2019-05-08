@@ -325,7 +325,7 @@ SECT_INTERP static jl_value_t *do_call(jl_value_t **args, size_t nargs, interpre
     size_t i;
     for (i = 0; i < nargs; i++)
         argv[i] = eval_value(args[i], s);
-    jl_value_t *result = jl_apply_generic(argv, nargs);
+    jl_value_t *result = jl_apply(argv, nargs);
     JL_GC_POP();
     return result;
 }

@@ -1032,11 +1032,11 @@ static jl_value_t *jl_invoke_julia_macro(jl_array_t *args, jl_module_t *inmodule
         margs[0] = jl_toplevel_eval(*ctx, margs[0]);
         jl_method_instance_t *mfunc = jl_method_lookup(jl_gf_mtable(margs[0]), margs, nargs, 1, world);
         if (mfunc == NULL) {
-            jl_method_error((jl_function_t*)margs[0], margs, nargs, world);
+            jl_method_error((jl_function_t*)margs[0], &margs[1], nargs - 1, world);
             // unreachable
         }
         *ctx = mfunc->def.method->module;
-        result = jl_invoke(margs[0], &margs[1], nargs - 1, mfunc);
+        result = jl_invoke(margs[0], &margs[1], nargs, mfunc);
     }
     JL_CATCH {
         if (jl_loaderror_type == NULL) {

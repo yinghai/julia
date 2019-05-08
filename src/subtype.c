@@ -1448,19 +1448,23 @@ JL_DLLEXPORT int jl_is_not_broken_subtype(jl_value_t *a, jl_value_t *b)
     return !jl_is_kind(b) || !jl_is_type_type(a); // || jl_is_datatype_singleton((jl_datatype_t*)jl_tparam0(a));
 }
 
-int jl_tuple_isa(jl_value_t **child, size_t cl, jl_datatype_t *pdt)
+int jl_tuple_isa(jl_value_t *child1, jl_value_t **child, size_t cl, jl_datatype_t *pdt)
 {
     if (jl_is_tuple_type(pdt) && !jl_is_va_tuple(pdt)) {
         if (cl != jl_nparams(pdt))
             return 0;
         size_t i;
-        for(i=0; i < cl; i++) {
-            if (!jl_isa(child[i], jl_tparam(pdt,i)))
+        if (cl == 0)
+            return 1;
+        if (!jl_isa(child1, jl_tparam(pdt, 0)))
+            return 0;
+        for (i = 1; i < cl; i++) {
+            if (!jl_isa(child[i - 1], jl_tparam(pdt, i)))
                 return 0;
         }
         return 1;
     }
-    jl_value_t *tu = (jl_value_t*)arg_type_tuple(child, cl);
+    jl_value_t *tu = (jl_value_t*)arg_type_tuple(child1, child, cl);
     int ans;
     JL_GC_PUSH1(&tu);
     ans = jl_subtype(tu, (jl_value_t*)pdt);
