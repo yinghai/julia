@@ -1401,12 +1401,13 @@ static jl_value_t *inst_tuple_w_(jl_value_t *t, jl_typeenv_t *env, jl_typestack_
     jl_value_t **iparams;
     int onstack = ntp < jl_page_size/sizeof(jl_value_t*);
     JL_GC_PUSHARGS(iparams, onstack ? ntp : 1);
-    jl_svec_t *ip_heap=NULL;
+    jl_svec_t *ip_heap = NULL;
     if (!onstack) {
         ip_heap = jl_alloc_svec(ntp);
         iparams[0] = (jl_value_t*)ip_heap;
         iparams = jl_svec_data(ip_heap);
     }
+    int bound = 0;
     int cacheable = 1;
     if (jl_is_va_tuple(tt))
         cacheable = 0;
@@ -1417,12 +1418,14 @@ static jl_value_t *inst_tuple_w_(jl_value_t *t, jl_typeenv_t *env, jl_typestack_
         iparams[i] = pi;
         if (ip_heap)
             jl_gc_wb(ip_heap, pi);
+        bound |= (pi != elt);
         if (cacheable && !jl_is_concrete_type(pi))
             cacheable = 0;
     }
-    jl_value_t *result = inst_datatype((jl_datatype_t*)tt, ip_heap, iparams, ntp, cacheable, stack);
+    if (bound)
+        t = inst_datatype(tt, ip_heap, iparams, ntp, cacheable, stack);
     JL_GC_POP();
-    return result;
+    return t;
 }
 
 static jl_value_t *inst_type_w_(jl_value_t *t, jl_typeenv_t *env, jl_typestack_t *stack, int check)
@@ -1433,44 +1436,38 @@ static jl_value_t *inst_type_w_(jl_value_t *t, jl_typeenv_t *env, jl_typestack_t
         while (e != NULL) {
             if (e->var == (jl_tvar_t*)t) {
                 jl_value_t *val = e->val;
-                // TODO jb/subtype this seems unnecessary
-                //if (check && !jl_is_typevar(val) && !within_typevar(val, (jl_tvar_t*)t)) {
-                //    jl_type_error_rt("type parameter",
-                //                     jl_symbol_name(((jl_tvar_t*)t)->name), t, val);
-                //}
                 return val;
             }
             e = e->prev;
         }
-        return (jl_value_t*)t;
+        return t;
     }
     if (jl_is_unionall(t)) {
-        if (!jl_has_free_typevars(t))
-            return t;
         jl_unionall_t *ua = (jl_unionall_t*)t;
-        jl_value_t *res=NULL, *lb=ua->var->lb, *ub=ua->var->ub;
-        JL_GC_PUSH3(&lb, &ub, &res);
-        res = jl_new_struct(jl_unionall_type, ua->var, NULL);
-        if (jl_has_bound_typevars(ua->var->lb, env))
-            lb = inst_type_w_(ua->var->lb, env, stack, check);
-        if (jl_has_bound_typevars(ua->var->ub, env))
-            ub = inst_type_w_(ua->var->ub, env, stack, check);
-        if (lb != ua->var->lb || ub != ua->var->ub) {
-            ((jl_unionall_t*)res)->var = jl_new_typevar(ua->var->name, lb, ub);
-            jl_gc_wb(res, ((jl_unionall_t*)res)->var);
-        }
-        jl_typeenv_t newenv = { ua->var, (jl_value_t*)((jl_unionall_t*)res)->var, env };
-        jl_value_t *newbody = inst_type_w_(ua->body, &newenv, stack, check);
-        if (newbody == (jl_value_t*)jl_emptytuple_type) {
-            // NTuple{0} => Tuple{} can make a typevar disappear
-            res = (jl_value_t*)jl_emptytuple_type;
+        jl_value_t *lb = NULL;
+        jl_value_t *var = NULL;
+        jl_value_t *newbody = NULL;
+        JL_GC_PUSH3(&lb, &var, &newbody);
+        lb = inst_type_w_(ua->var->lb, env, stack, check);
+        var = inst_type_w_(ua->var->ub, env, stack, check);
+        if (lb != ua->var->lb || var != ua->var->ub) {
+            var = (jl_value_t*)jl_new_typevar(ua->var->name, lb, var);
         }
         else {
-            ((jl_unionall_t*)res)->body = newbody;
-            jl_gc_wb(res, newbody);
+            var = (jl_value_t*)ua->var;
+        }
+        jl_typeenv_t newenv = { ua->var, var, env };
+        newbody = inst_type_w_(ua->body, &newenv, stack, check);
+        if (newbody == (jl_value_t*)jl_emptytuple_type) {
+            // NTuple{0} => Tuple{} can make a typevar disappear
+            t = (jl_value_t*)jl_emptytuple_type;
+        }
+        else if (newbody != ua->body || var != (jl_value_t*)ua->var) {
+            // if t's parameters are not bound in the environment, return it uncopied (#9378)
+            t = jl_new_struct(jl_unionall_type, var, newbody);
         }
         JL_GC_POP();
-        return res;
+        return t;
     }
     if (jl_is_uniontype(t)) {
         jl_uniontype_t *u = (jl_uniontype_t*)t;
@@ -1478,23 +1475,19 @@ static jl_value_t *inst_type_w_(jl_value_t *t, jl_typeenv_t *env, jl_typestack_t
         jl_value_t *b = NULL;
         JL_GC_PUSH2(&a, &b);
         b = inst_type_w_(u->b, env, stack, check);
-        jl_value_t *res;
-        if (a == u->a && b == u->b) {
-            res = t;
-        }
-        else {
+        if (a != u->a || b != u->b) {
             jl_value_t *uargs[2] = {a, b};
-            res = jl_type_union(uargs, 2);
+            t = jl_type_union(uargs, 2);
         }
         JL_GC_POP();
-        return res;
+        return t;
     }
     if (!jl_is_datatype(t))
         return t;
     jl_datatype_t *tt = (jl_datatype_t*)t;
     jl_svec_t *tp = tt->parameters;
     if (tp == jl_emptysvec)
-        return (jl_value_t*)t;
+        return t;
     jl_typename_t *tn = tt->name;
     if (tn == jl_tuple_typename)
         return inst_tuple_w_(t, env, stack, check);
@@ -1502,19 +1495,20 @@ static jl_value_t *inst_type_w_(jl_value_t *t, jl_typeenv_t *env, jl_typestack_t
     jl_value_t **iparams;
     JL_GC_PUSHARGS(iparams, ntp);
     int cacheable = 1, bound = 0;
-    for(i=0; i < ntp; i++) {
+    for (i = 0; i < ntp; i++) {
         jl_value_t *elt = jl_svecref(tp, i);
-        iparams[i] = inst_type_w_(elt, env, stack, check);
-        bound |= (iparams[i] != elt);
-        if (cacheable && jl_has_free_typevars(iparams[i]))
+        jl_value_t *pi = inst_type_w_(elt, env, stack, check);
+        iparams[i] = pi;
+        bound |= (pi != elt);
+        if (cacheable && jl_has_free_typevars(pi))
             cacheable = 0;
     }
     // if t's parameters are not bound in the environment, return it uncopied (#9378)
-    if (!bound) { JL_GC_POP(); return (jl_value_t*)t; }
-
-    jl_value_t *result = inst_datatype((jl_datatype_t*)tt, NULL, iparams, ntp, cacheable, stack);
+    if (bound)
+        //t = inst_datatype(tt, NULL, iparams, ntp, cacheable, stack);
+        t = inst_datatype_inner(tt, NULL, iparams, ntp, cacheable, stack, env);
     JL_GC_POP();
-    return result;
+    return t;
 }
 
 static jl_value_t *instantiate_with(jl_value_t *t, jl_value_t **env, size_t n, jl_typeenv_t *te)
