@@ -26,10 +26,7 @@ function nonmissingtype_checked(T::Type)
 end
 
 promote_rule(T::Type{Missing}, S::Type) = Union{S, Missing}
-promote_rule(T::Type{Missing}, S::Type{Any}) = Any
-promote_rule(T::Type{Union{Nothing, Missing}}, S::Type{Any}) = Any
 promote_rule(T::Type{Union{Nothing, Missing}}, S::Type) = Union{S, Nothing, Missing}
-promote_rule(T::Type{>:Union{Nothing, Missing}}, S::Type{Any}) = Any
 function promote_rule(T::Type{>:Union{Nothing, Missing}}, S::Type)
     R = nonnothingtype(T)
     R >: T && return Any
@@ -40,7 +37,6 @@ function promote_rule(T::Type{>:Union{Nothing, Missing}}, S::Type)
     R = promote_type(T, S)
     return Union{R, Nothing, Missing}
 end
-promote_rule(T::Type{>:Missing}, S::Type{Any}) = Any
 function promote_rule(T::Type{>:Missing}, S::Type)
     R = nonmissingtype(T)
     R >: T && return Any

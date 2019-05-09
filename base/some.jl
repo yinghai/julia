@@ -16,8 +16,6 @@ promote_rule(::Type{Some{T}}, ::Type{Some{S}}) where {T, S<:T} = Some{T}
 
 nonnothingtype(::Type{T}) where {T} = Core.Compiler.typesubtract(T, Nothing)
 promote_rule(T::Type{Nothing}, S::Type) = Union{S, Nothing}
-promote_rule(T::Type{Nothing}, S::Type{Any}) = Any
-promote_rule(T::Type{>:Nothing}, S::Type{Any}) = Any
 function promote_rule(T::Type{>:Nothing}, S::Type)
     R = nonnothingtype(T)
     R >: T && return Any
