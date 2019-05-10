@@ -197,7 +197,7 @@ JL_DLLEXPORT int jl_run_once(uv_loop_t *loop)
         jl_gc_safepoint_(ptls);
         JL_UV_LOCK();
         loop->stop_flag = 0;
-        int r = uv_run(loop,UV_RUN_ONCE);
+        int r = uv_run(loop, UV_RUN_ONCE);
         JL_UV_UNLOCK();
         return r;
     }
@@ -209,11 +209,12 @@ JL_DLLEXPORT int jl_process_events(uv_loop_t *loop)
     jl_ptls_t ptls = jl_get_ptls_states();
     if (loop) {
         jl_gc_safepoint_(ptls);
-        JL_UV_LOCK();
-        loop->stop_flag = 0;
-        int r = uv_run(loop,UV_RUN_NOWAIT);
-        JL_UV_UNLOCK();
-        return r;
+        if (jl_mutex_trylock(&jl_uv_mutex)) {
+            loop->stop_flag = 0;
+            int r = uv_run(loop, UV_RUN_NOWAIT);
+            JL_UV_UNLOCK();
+            return r;
+        }
     }
     return 0;
 }

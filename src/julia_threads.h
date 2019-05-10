@@ -156,7 +156,7 @@ struct _jl_tls_states_t {
     int8_t disable_gc;
     volatile sig_atomic_t defer_signal;
     struct _jl_task_t *current_task;
-    struct _jl_task_t *previous_task;
+    void *placeholder;
     struct _jl_task_t *root_task;
     void *stackbase;
     size_t stacksize;
@@ -288,6 +288,8 @@ int8_t jl_gc_safe_leave(jl_ptls_t ptls, int8_t state); // Can be a safepoint
 JL_DLLEXPORT void (jl_gc_safepoint)(void);
 
 JL_DLLEXPORT void jl_gc_enable_finalizers(jl_ptls_t ptls, int on);
+
+JL_DLLEXPORT void jl_wakeup_thread(int16_t tid);
 
 #ifdef __cplusplus
 }
