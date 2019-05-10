@@ -518,6 +518,9 @@ end
             @inferred quantile(T[1, 2, 3], (S(0.5), S(0.6)))
         end
     end
+    x = [3; 2; 1]
+    y = zeros(3)
+    @test quantile!(y, x, [0.1, 0.5, 0.9]) === y
 end
 
 # StatsBase issue 164
