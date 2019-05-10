@@ -414,7 +414,8 @@ typedef struct jl_typeenv_t {
     struct jl_typeenv_t *prev;
 } jl_typeenv_t;
 
-int jl_tuple_isa(jl_value_t *child1, jl_value_t **child, size_t cl, jl_datatype_t *pdt);
+int jl_tuple_isa(jl_value_t **child, size_t cl, jl_datatype_t *pdt);
+int jl_tuple1_isa(jl_value_t *child1, jl_value_t **child, size_t cl, jl_datatype_t *pdt);
 
 int jl_has_intersect_type_not_kind(jl_value_t *t);
 int jl_subtype_invariant(jl_value_t *a, jl_value_t *b, int ta);

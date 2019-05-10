@@ -967,7 +967,7 @@ JL_CALLABLE(jl_f_invoke)
     JL_GC_PUSH1(&argtypes);
     if (!jl_is_tuple_type(jl_unwrap_unionall(args[1])))
         jl_type_error("invoke", (jl_value_t*)jl_anytuple_type_type, args[1]);
-    if (!jl_tuple_isa(args[2], &args[3], nargs - 2, (jl_datatype_t*)argtypes))
+    if (!jl_tuple_isa(&args[2], nargs - 2, (jl_datatype_t*)argtypes))
         jl_error("invoke: argument type error");
     jl_value_t *res = jl_gf_invoke(argtypes, args[0], &args[2], nargs - 1);
     JL_GC_POP();

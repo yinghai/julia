@@ -813,7 +813,7 @@ jl_typemap_entry_t *jl_typemap_entry_assoc_exact(jl_typemap_entry_t *ml, jl_valu
                     continue;
             }
             else {
-                if (!jl_tuple_isa(arg1, args, n, ml->sig))
+                if (!jl_tuple1_isa(arg1, args, n, ml->sig))
                     continue;
             }
 
@@ -823,7 +823,7 @@ jl_typemap_entry_t *jl_typemap_entry_assoc_exact(jl_typemap_entry_t *ml, jl_valu
                     // checking guard entries require a more
                     // expensive subtype check, since guard entries added for @nospecialize might be
                     // abstract. this fixed issue #12967.
-                    if (jl_tuple_isa(arg1, args, n, (jl_tupletype_t*)jl_svecref(ml->guardsigs, i))) {
+                    if (jl_tuple1_isa(arg1, args, n, (jl_tupletype_t*)jl_svecref(ml->guardsigs, i))) {
                         goto nomatch;
                     }
                 }
