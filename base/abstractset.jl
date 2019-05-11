@@ -230,13 +230,8 @@ end
 <=(l::AbstractSet, r::AbstractSet) = l ⊆ r
 
 function issubset(l, r)
-    if haslength(r)
-        rlen = length(r)
-        #This threshold was empirically determined by repeatedly
-        #sampling using these two methods (see #26198)
-        lenthresh = 70
-
-        if rlen > lenthresh && !isa(r, AbstractSet)
+    if !isa(r, Union{AbstractSet,AbstractDict}) && haslength(r)
+        if length(r) > 70 # this threshold was empirically determined (cf. #26198)
             return issubset(l, Set(r))
         end
     end
