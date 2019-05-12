@@ -229,8 +229,21 @@ end
 <( l::AbstractSet, r::AbstractSet) = l ⊊ r
 <=(l::AbstractSet, r::AbstractSet) = l ⊆ r
 
+"""
+    hasfastin(T)
+
+Determine whether the computation `x ∈ collection` where `collection::T` can be considered
+as a "fast" operation (typically constant or logarithmic complexity).
+The definition hasfastin(x) = hasfastin(typeof(x)) is provided for convenience so that instances
+can be passed instead of types.
+However the form that accepts a type argument should be defined for new types.
+"""
+hasfastin(::Type) = false
+hasfastin(::Type{X}) where {X<:Union{AbstractSet,AbstractDict,AbstractRange}} = true
+hasfastin(x) = hasfastin(typeof(x))
+
 function issubset(l, r)
-    if !isa(r, Union{AbstractSet,AbstractDict}) && haslength(r)
+    if !hasfastin(r) && haslength(r)
         if length(r) > 70 # this threshold was empirically determined (cf. #26198)
             return issubset(l, Set(r))
         end
