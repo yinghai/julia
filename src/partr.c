@@ -364,8 +364,6 @@ extern volatile unsigned _threadedregion;
 JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
-    // spin briefly before blocking when the workqueue is empty
-    size_t spin_count = 0;
     uint64_t start_cycles = 0;
     jl_task_t *task;
 
@@ -375,17 +373,18 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
         if (task)
             return task;
 
-        if (++spin_count > 1000 && jl_atomic_load(&jl_uv_n_waiters) == 0) {
-            // after some delay, check the kernel for new messages too
-            spin_count = 0;
-            jl_process_events(jl_global_event_loop());
-            task = get_next_task(getsticky);
-            if (task)
-                return task;
+        if (start_cycles == 1) {
+            // maybe check the kernel for new messages too
+            if (jl_atomic_load(&jl_uv_n_waiters) == 0)
+                jl_process_events(jl_global_event_loop());
+            start_cycles = 0;
+            continue;
         }
 
         jl_cpu_pause();
-        if (sleep_check_after_threshold(&start_cycles) && sleep_check_now()) {
+        if (sleep_check_after_threshold(&start_cycles) || (!_threadedregion && ptls->tid == 0)) {
+            if (!sleep_check_now())
+                continue;
             task = get_next_task(getsticky);
             if (task)
                 return task;
