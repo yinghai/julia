@@ -154,9 +154,11 @@ struct _jl_tls_states_t {
     volatile int8_t gc_state;
     volatile int8_t in_finalizer;
     int8_t disable_gc;
+    jl_thread_heap_t heap;
+    uv_mutex_t sleep_lock;
+    uv_cond_t wake_signal;
     volatile sig_atomic_t defer_signal;
     struct _jl_task_t *current_task;
-    void *placeholder;
     struct _jl_task_t *root_task;
     void *stackbase;
     size_t stacksize;
@@ -173,7 +175,6 @@ struct _jl_tls_states_t {
     // this is limited to the few places we do synchronous IO
     // we can make this more general (similar to defer_signal) if necessary
     volatile sig_atomic_t io_wait;
-    jl_thread_heap_t heap;
 #ifndef _OS_WINDOWS_
     // These are only used on unix now
     pthread_t system_id;

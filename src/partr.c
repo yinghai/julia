@@ -46,20 +46,10 @@ static int16_t heap_p;
 /* unbias state for the RNG */
 static uint64_t cong_unbias;
 
-/* for thread sleeping */
-typedef struct thread_sleep_tag {
-    uv_mutex_t sleep_lock;
-    uv_cond_t wake_signal;
-} thread_sleep_t;
-
-static thread_sleep_t **all_sleep_states;
-
 static const int16_t not_sleeping = 0; // no thread should be sleeping--there might be work in the multi-queue
 static const int16_t checking_for_sleeping = 1; // some threads are checking the multi-queue to see if it is safe to transition to sleeping
 static const int16_t sleeping = 2; // it is acceptable for a thread to be sleeping if it's sticky queue is empty
 static int16_t sleep_check_state; // status of the multi-queue
-
-uint64_t sleep_threshold;
 
 
 /*  multiq_init()
@@ -250,20 +240,9 @@ void jl_init_threadinginfra(void)
     /* initialize the synchronization trees pool and the multiqueue */
     multiq_init();
 
-    /* initialize the sleep mechanism */
-    sleep_threshold = DEFAULT_THREAD_SLEEP_THRESHOLD;
-    char *cp = getenv(THREAD_SLEEP_THRESHOLD_NAME);
-    if (cp) {
-        if (!strncasecmp(cp, "infinite", 8))
-            sleep_threshold = 0;
-        else
-            sleep_threshold = strtoull(cp, NULL, 10);
-    }
-    all_sleep_states = (thread_sleep_t **)calloc(jl_n_threads, sizeof(thread_sleep_t *));
-    thread_sleep_t *on = (thread_sleep_t *)calloc(1, sizeof(thread_sleep_t));
-    uv_mutex_init(&on->sleep_lock);
-    uv_cond_init(&on->wake_signal);
-    all_sleep_states[0] = on;
+    jl_ptls_t ptls = jl_get_ptls_states();
+    uv_mutex_init(&ptls->sleep_lock);
+    uv_cond_init(&ptls->wake_signal);
     sleep_check_state = not_sleeping;
 }
 
@@ -284,10 +263,8 @@ void jl_threadfun(void *arg)
     jl_ptls_t ptls = jl_get_ptls_states();
 
     // set up sleep mechanism for this thread
-    thread_sleep_t *on = (thread_sleep_t *)calloc(1, sizeof(thread_sleep_t));
-    uv_mutex_init(&on->sleep_lock);
-    uv_cond_init(&on->wake_signal);
-    all_sleep_states[ptls->tid] = on;
+    uv_mutex_init(&ptls->sleep_lock);
+    uv_cond_init(&ptls->wake_signal);
 
     // wait for all threads
     jl_gc_state_set(ptls, JL_GC_STATE_SAFE, 0);
@@ -302,20 +279,17 @@ void jl_threadfun(void *arg)
 }
 
 
-//  sleep_check_after_threshold() -- if sleep_threshold cycles have passed and there's no work to do, return 1
+//  sleep_check_after_threshold() -- if sleep_threshold cycles have passed, return 1
 static int sleep_check_after_threshold(uint64_t *start_cycles)
 {
-    if (sleep_threshold) {
-        if (!(*start_cycles)) {
-            *start_cycles = jl_hrtime();
-            return 0;
-        }
-        uint64_t elapsed_cycles = jl_hrtime() - (*start_cycles);
-        if (elapsed_cycles >= sleep_threshold) {
-            if (sleep_check_now())
-                return 1;
-            *start_cycles = 0;
-        }
+    if (!(*start_cycles)) {
+        *start_cycles = jl_hrtime();
+        return 0;
+    }
+    uint64_t elapsed_cycles = jl_hrtime() - (*start_cycles);
+    if (elapsed_cycles >= DEFAULT_THREAD_SLEEP_THRESHOLD) {
+        *start_cycles = 0;
+        return 1;
     }
     return 0;
 }
@@ -324,10 +298,10 @@ static int sleep_check_after_threshold(uint64_t *start_cycles)
 static void wake_thread(jl_ptls_t ptls, int16_t tid)
 {
     if (ptls->tid != tid) {
-        thread_sleep_t *on = all_sleep_states[tid];
-        uv_mutex_lock(&on->sleep_lock);
-        uv_cond_signal(&on->wake_signal);
-        uv_mutex_unlock(&on->sleep_lock);
+        jl_ptls_t other = jl_all_tls_states[tid];
+        uv_mutex_lock(&other->sleep_lock);
+        uv_cond_signal(&other->wake_signal);
+        uv_mutex_unlock(&other->sleep_lock);
     }
 }
 
@@ -343,7 +317,7 @@ JL_DLLEXPORT void jl_wakeup_thread(int16_t tid)
     }
     else {
         // check if the other threads might be sleeping
-        if (jl_atomic_load_acquire(&sleep_check_state) != not_sleeping && sleep_threshold) {
+        if (jl_atomic_load_acquire(&sleep_check_state) != not_sleeping) {
             if (tid == -1) {
                 // something added to the multi-queue: notify all threads
                 int16_t state = jl_atomic_exchange(&sleep_check_state, not_sleeping);
@@ -411,7 +385,7 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
         }
 
         jl_cpu_pause();
-        if (sleep_check_after_threshold(&start_cycles)) {
+        if (sleep_check_after_threshold(&start_cycles) && sleep_check_now()) {
             task = get_next_task(getsticky);
             if (task)
                 return task;
@@ -459,16 +433,15 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
                 // otherwise nothing to do, so just go to sleep
             }
             // the other threads will just wait for on signal to resume
-            thread_sleep_t *on = all_sleep_states[ptls->tid];
             int8_t gc_state = jl_gc_safe_enter(ptls);
-            uv_mutex_lock(&on->sleep_lock);
+            uv_mutex_lock(&ptls->sleep_lock);
             while (jl_atomic_load(&sleep_check_state) == sleeping) {
                 task = get_next_task(getsticky);
                 if (task)
                     break;
-                uv_cond_wait(&on->wake_signal, &on->sleep_lock);
+                uv_cond_wait(&ptls->wake_signal, &ptls->sleep_lock);
             }
-            uv_mutex_unlock(&on->sleep_lock);
+            uv_mutex_unlock(&ptls->sleep_lock);
             jl_gc_safe_leave(ptls, gc_state);
             start_cycles = 0;
             if (task)

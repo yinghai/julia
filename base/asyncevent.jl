@@ -124,7 +124,6 @@ isopen(t::Union{Timer, AsyncCondition}) = t.isopen
 function close(t::Union{Timer, AsyncCondition})
     if t.handle != C_NULL && isopen(t)
         t.isopen = false
-        isa(t, Timer) && ccall(:jl_uv_timer_stop, Cint, (Ptr{Cvoid},), t)
         ccall(:jl_close_uv, Cvoid, (Ptr{Cvoid},), t)
     end
     nothing
