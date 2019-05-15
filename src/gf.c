@@ -2055,12 +2055,13 @@ JL_DLLEXPORT jl_value_t *jl_invoke(jl_value_t *F, jl_value_t **args, uint32_t na
     return _jl_invoke(F, args, nargs, mfunc, world);
 }
 
-STATIC_INLINE int sig_match_fast(jl_value_t *arg1, jl_value_t **args, jl_value_t **sig, size_t i, size_t n)
+STATIC_INLINE int sig_match_fast(jl_value_t *arg1t, jl_value_t **args, jl_value_t **sig, size_t n)
 {
     // NOTE: This function is a huge performance hot spot!!
-    if (arg1 != sig[0])
+    if (arg1t != sig[0])
         return 0;
-    for (; i < n; i++) {
+    size_t i;
+    for (i = 1; i < n; i++) {
         jl_value_t *decl = sig[i];
         jl_value_t *a = args[i - 1];
         if (jl_typeof(a) != decl) {
@@ -2107,6 +2108,7 @@ STATIC_INLINE jl_method_instance_t *jl_lookup_generic_(jl_value_t *F, jl_value_t
         show_call(F, args, nargs);
 #endif
     nargs++; // add F to argument count
+    jl_value_t *FT = jl_typeof(F);
 
     /*
       search order:
@@ -2139,7 +2141,7 @@ STATIC_INLINE jl_method_instance_t *jl_lookup_generic_(jl_value_t *F, jl_value_t
             i = _i; \
             entry = call_cache[cache_idx[i]]; \
             if (entry && nargs == jl_svec_len(entry->sig->parameters) && \
-                sig_match_fast(F, args, jl_svec_data(entry->sig->parameters), 0, nargs) && \
+                sig_match_fast(FT, args, jl_svec_data(entry->sig->parameters), nargs) && \
                 world >= entry->min_world && world <= entry->max_world) { \
                 goto have_entry; \
             } \
