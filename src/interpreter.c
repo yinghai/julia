@@ -885,6 +885,24 @@ SECT_INTERP jl_value_t *jl_interpret_toplevel_thunk(jl_module_t *m, jl_code_info
     return (jl_value_t *)enter_interpreter_frame(jl_interpret_toplevel_thunk_callback, (void*)&args);
 }
 
+typedef struct {
+    jl_module_t *m,
+    jl_value_t *e,
+    int fast,
+    int expanded
+} jl_interpret_toplevel_args;
+SECT_INTERP INTERP_CALLBACK_ABI void *jl_interpret_toplevel_callback(interpreter_state *s, void *vargs) {
+    jl_interpret_toplevel_args *args = (jl_interpret_toplevel_args*)vargs;
+    FIXME: Set s.src and s.ip to do away with jl_filename & jl_lineno
+    return jl_toplevel_eval_flex(args.m, args.e, args.fast, args.expanded);
+}
+SECT_INTERP jl_value_t *jl_interpret_toplevel(jl_module_t *m, jl_value_t *e,
+                                              int fast, int expanded)
+{
+    struct jl_interpret_toplevel_args = {m, e, fast, expanded};
+    return (jl_value_t *)enter_interpreter_frame(jl_interpret_toplevel_callback, (void*)&args)
+}
+
 // deprecated: do not use this method in new code
 // it uses special scoping / evaluation / error rules
 // which should instead be handled in lowering
